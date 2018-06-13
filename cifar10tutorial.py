@@ -19,7 +19,7 @@ testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True
 testloader = torch.utils.data.DataLoader(testset, batch_size=4, shuffle=False, num_workers=2)
 
 
-net = models.resnet18() # torchvision 에 이미 정의된 모델을 가져옵니다.net = models.
+net = models.resnet18()
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=0.001, momentum=0.9)
 
@@ -31,7 +31,7 @@ if torch.cuda.device_count() > 1:
     print('\n===> Training on GPU!')
     net = nn.DataParallel(net)
 
-epochs = 2  # dataset을 여러번 사용해 트레이닝을 시킵니다.
+epochs = 2
 
 for epoch in range(epochs):
     print('\n===> epoch %d' % epoch)
