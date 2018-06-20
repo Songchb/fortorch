@@ -46,7 +46,7 @@ __global__ void maxpool(float *input, float *output, const int input_size, const
 	output[maxpool_output_size * row + col] = max;
 	
 }
-
+/*
 __global__ void gemm(float *a, float *b, float *c, const float alpha, const float beta, float *output, const int input_size){
     // a, b, c : input matrix address
     // alpha, beta : input constant
@@ -98,7 +98,7 @@ __global__ void gemm(float *a, float *b, float *c, const float alpha, const floa
 	if()
 		output[] = val;
 }
-
+*/
 
 int main(int argc, char **argv) {
     if(argc < 4) {
@@ -187,7 +187,7 @@ int main(int argc, char **argv) {
     cudaMemcpy(dev_mem_input, &maxpool_input, sizeof(float) * input_size * input_size, cudaMemcpyHostToDevice);
 
     // launch CUDA kernels	
-
+	/*
     // First launch gemm kernel
     gemm<<<num_of_blocks, block_size>>>(dev_mem_a, dev_mem_b, dev_mem_c, alpha, beta, gemm_output, input_size);
     cudaDeviceSynchronize();
@@ -196,11 +196,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "ERROR %s\n", cudaGetErrorString(error));
         return 1;
     }
- 
+ */
     // Then run maxpooling
     maxpool<<<num_of_maxpool_blocks, block_size>>>(dev_mem_input, maxpool_output, input_size, filter_size);
     cudaDeviceSynchronize();
-    error = cudaGetLastError();
+    cudaError_t error = cudaGetLastError();
     if(error!=cudaSuccess) {
         fprintf(stderr, "ERROR %s\n", cudaGetErrorString(error));
         return 1;
