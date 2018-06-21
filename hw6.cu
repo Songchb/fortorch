@@ -1,7 +1,7 @@
-/*	P.L. Assignment6 
- *	Name	: ¼ÛÂù¹ü, CHANBUM SONG
+ï»¿/*	P.L. Assignment6 
+ *	Name	: ì†¡ì°¬ë²”, CHANBUM SONG
  *	SID		: 2013012007
- *	Date	: 2018.06.08.
+ *	Date	: 2018.06.08z.
  */
 
 #include<stdlib.h>
@@ -18,87 +18,78 @@
 
 using namespace std;
 
-__global__ void maxpool(float *input, float *output, const int input_size, const int filter_size) {
-    // input : input_matrix address	
-    // output : output buffer address
-    // input_size : width, height of input matrix
-    // filter_size : filter_size of maxpolling
-    // all input, output matrices are vectorized
+___global__ void maxpool(float *input, float *output, const int input_size, const int filter_size) {
+	// input : input_matrix address	
+	// output : output buffer address
+	// input_size : width, height of input matrix
+	// filter_size : filter_size of maxpolling
+	// all input, output matrices are vectorized
 
-	const int maxpool_output_size = input_size/filter_size;
+	const int maxpool_output_size = input_size / filter_size;
 
+	int col = blockDim.x * blockIdx.x + threadIdx.x;
+	int row = blockDim.y * blockIdx.y + threadIdx.y;
 
-    int col = blockDim.x * blockIdx.x + threadIdx.x;
-    int row = blockDim.y * blockIdx.y + threadIdx.y;
-	
 	// out of bound
-	if(row>=maxpool_output_size ||col>=maxpool_output_size) { return; }
-	
-    // CHANGE
+	if (row >= maxpool_output_size || col >= maxpool_output_size) { return; }
 
 	float max = input[(row * filter_size)*input_size + (col * filter_size)];
-	for(int i = 0; i < filter_size; i++)
-		for(int j = 0; j < filter_size; j++){
-			if(max < input[(row * filter_size + i)*input_size + (col * filter_size + j)])
+	for (int i = 0; i < filter_size; i++)
+		for (int j = 0; j < filter_size; j++) {
+			if (max < input[(row * filter_size + i)*input_size + (col * filter_size + j)])
 				max = input[(row * filter_size + i)*input_size + (col * filter_size + j)];
 		}
-	
+	// __device__ â€‹ float fmaxf ( float  x, float  y ) ?
 	output[maxpool_output_size * row + col] = max;
-	
 }
-/*
-__global__ void gemm(float *a, float *b, float *c, const float alpha, const float beta, float *output, const int input_size){
-    // a, b, c : input matrix address
-    // alpha, beta : input constant
-    // output : output buffer address
-    // input_size : width, height of input matrix
-    // all input, output matrices are vectorized
 
-    int tx = threadIdx.x, ty = threadIdx.y;
-    int bx = blockIdx.x,  by = blockIdx.y;
+__global__ void gemm(float *a, float *b, float *c, const float alpha, const float beta, float *output, const int input_size) {
+	// a, b, c : input matrix address
+	// alpha, beta : input constant
+	// output : output buffer address
+	// input_size : width, height of input matrix
+	// all input, output matrices are vectorized
 
-    int row = by*blockDim.y + ty;
-    int col = bx*blockDim.x + tx;
-    
-    if(row>=input_size || col>=input_size) { return; }
-    
-    // allocate 2D tiles in __shared__ memory
-    __shared__ float s_a[TILE_WIDTH][TILE_WIDTH];
-    __shared__ float s_b[TILE_WIDTH][TILE_WIDTH];
+	int tx = threadIdx.x, ty = threadIdx.y;
+	int bx = blockIdx.x, by = blockIdx.y;
 
-    float result = 0;
+	int row = by*blockDim.y + ty;
+	int col = bx*blockDim.x + tx;
 
-    // make sure you handle the case 
-    // when the matrix sizes are not multiple of TILE_WIDTH!
-    // loop over the tiles of the input in phases
-    for(int p = 0; p < input_size/TILE_WIDTH; ++p){
-		
+	if (row >= input_size || col >= input_size) { return; }
+
+	// allocate 2D tiles in __shared__ memory
+	__shared__ float s_a[TILE_WIDTH][TILE_WIDTH];
+	__shared__ float s_b[TILE_WIDTH][TILE_WIDTH];
+
+	float result = 0;
+
+	for (int p = 0; p < input_size / TILE_WIDTH; ++p) {
 		// copying a tile from array a to s_a
-		if()
-			s_a = a[];
+		if (row < input_size && (p*TILE_WIDTH + tx)<input_size)
+			s_a[ty][tx] = a[row*input_size + p*TILE_WIDTH + tx];
 		else
-			s_a = 0;
+			s_a[ty][tx] = 0;
 		__syncthreads();
 
 		// copying a tile from array b to s_b
-		if()
-			s_b = b[];
+		if (col<input_size && (p*TILE_WIDTH + ty)<input_size)
+			s_b[ty][tx] = b[(p*TILE_WIDTH + ty) * input_size + col];
 		else
-			s_b = 0;
+			s_b[ty][tx] = 0;
 		__syncthreads();
 
 		// multiplying elements
-		for(int i=0; i<TILE_WIDTH;i++)	
-			result = alpha * s_a[] * s_b[] + beta * s_c[];
-        __syncthreads();
-    }
+		for (int i = 0; i < TILE_WIDTH; i++)
+			result += alpha * s_a[ty][i] * s_b[i][tx];
+		__syncthreads();
+	}
 
-    // write out the result to output[row*input_size + col] 
-    // CHANGE
-	if()
-		output[] = val;
+	result += beta * c[row*input_size + col];
+
+	output[row*input_size + col] = result;
 }
-*/
+
 
 int main(int argc, char **argv) {
     if(argc < 4) {
@@ -187,7 +178,7 @@ int main(int argc, char **argv) {
     cudaMemcpy(dev_mem_input, &maxpool_input, sizeof(float) * input_size * input_size, cudaMemcpyHostToDevice);
 
     // launch CUDA kernels	
-	/*
+
     // First launch gemm kernel
     gemm<<<num_of_blocks, block_size>>>(dev_mem_a, dev_mem_b, dev_mem_c, alpha, beta, gemm_output, input_size);
     cudaDeviceSynchronize();
@@ -196,11 +187,11 @@ int main(int argc, char **argv) {
         fprintf(stderr, "ERROR %s\n", cudaGetErrorString(error));
         return 1;
     }
- */
+ 
     // Then run maxpooling
     maxpool<<<num_of_maxpool_blocks, block_size>>>(dev_mem_input, maxpool_output, input_size, filter_size);
     cudaDeviceSynchronize();
-    cudaError_t error = cudaGetLastError();
+    error = cudaGetLastError();
     if(error!=cudaSuccess) {
         fprintf(stderr, "ERROR %s\n", cudaGetErrorString(error));
         return 1;
