@@ -1,7 +1,9 @@
 import argparse
 import os
+import random
 import shutil
 import time
+import warnings
 
 import torch
 import torch.nn as nn
@@ -11,191 +13,317 @@ import torch.distributed as dist
 import torch.optim
 import torch.utils.data
 import torch.utils.data.distributed
-from torch.autograd import Variable
-
-import torchvision
 import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torchvision.models as models
 
-from utils import progress_bar
+model_names = sorted(name for name in models.__dict__
+    if name.islower() and not name.startswith("__")
+    and callable(models.__dict__[name]))
 
-# Module
-import googlenet
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
+parser.add_argument('data', metavar='DIR',
+                    help='path to dataset')
+parser.add_argument('--arch', '-a', metavar='ARCH', default='resnet18',
+                    choices=model_names,
+                    help='model architecture: ' +
+                        ' | '.join(model_names) +
+                        ' (default: resnet18)')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
+parser.add_argument('--epochs', default=90, type=int, metavar='N',
+                    help='number of total epochs to run')
+parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
+                    help='manual epoch number (useful on restarts)')
+parser.add_argument('-b', '--batch-size', default=256, type=int,
+                    metavar='N', help='mini-batch size (default: 256)')
+parser.add_argument('--lr', '--learning-rate', default=0.1, type=float,
+                    metavar='LR', help='initial learning rate')
+parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
+                    help='momentum')
+parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
+                    metavar='W', help='weight decay (default: 1e-4)')
+parser.add_argument('--print-freq', '-p', default=10, type=int,
+                    metavar='N', help='print frequency (default: 10)')
+parser.add_argument('--resume', default='', type=str, metavar='PATH',
+                    help='path to latest checkpoint (default: none)')
+parser.add_argument('-e', '--evaluate', dest='evaluate', action='store_true',
+                    help='evaluate model on validation set')
+parser.add_argument('--pretrained', dest='pretrained', action='store_true',
+                    help='use pre-trained model')
+parser.add_argument('--world-size', default=1, type=int,
+                    help='number of distributed processes')
+parser.add_argument('--dist-url', default='tcp://224.66.41.62:23456', type=str,
+                    help='url used to set up distributed training')
+parser.add_argument('--dist-backend', default='gloo', type=str,
+                    help='distributed backend')
+parser.add_argument('--seed', default=None, type=int,
+                    help='seed for initializing training. ')
+parser.add_argument('--gpu', default=None, type=int,
+                    help='GPU id to use.')
 
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Traning')
+best_prec1 = 0
 
-parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--backend', default='gloo', type=str)
-parser.add_argument('--world-size', default=1, type=int, help='number of distributed processes (default=1)')
-parser.add_argument('--dist-url', type=str, help='url used to set up distributed training')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
-parser.add_argument('--epochs', default=3, type=int, metavar='N', help='number of total epochs to run')
-parser.add_argument('--rank', default=0, type=int, help='current node rank')
-args = parser.parse_args()
 
-args.distributed = args.world_size > 1
-args.use_cuda = torch.cuda.is_available()
-device = 'cuda' if torch.cuda.is_available() else 'cpu'
+def main():
+    global args, best_prec1
+    args = parser.parse_args()
 
-print('===> training on: ', device)
-best_accuracy = 0
-start_epoch = 0
+    if args.seed is not None:
+        random.seed(args.seed)
+        torch.manual_seed(args.seed)
+        cudnn.deterministic = True
+        warnings.warn('You have chosen to seed training. '
+                      'This will turn on the CUDNN deterministic setting, '
+                      'which can slow down your training considerably! '
+                      'You may see unexpected behavior when restarting '
+                      'from checkpoints.')
 
-# Data
-print('===> Preparing Data')
-transform_tran = transforms.Compose([
-    transforms.RandomCrop(32, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
+    if args.gpu is not None:
+        warnings.warn('You have chosen a specific GPU. This will completely '
+                      'disable data parallelism.')
 
-transform_test = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-])
+    args.distributed = args.world_size > 1
 
-trainset = torchvision.datasets.CIFAR10(root='./data', train=True, download=True, transform=transform_tran)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=128, shuffle=True, num_workers=1)
+    if args.distributed:
+        dist.init_process_group(backend=args.dist_backend, init_method=args.dist_url,
+                                world_size=args.world_size)
 
-testset = torchvision.datasets.CIFAR10(root='./data', train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=1, pin_memory=True)
-
-classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
-
-if args.resume:
-    print('===> Resuming from checkpoint...')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
-
-    checkpoint = torch.load('./checkpoint/ckpt.t7')
-    net = checkpoint['net']
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
-else:
-    print('===> Building model...')
-    net = googlenet.GoogLeNet()
-
-if args.distributed:
-    print('===> Distributed Training Mode')
-    dist.init_process_group(backend=args.backend, init_method=args.dist_url, rank=args.rank, world_size=args.world_size)
-
-if args.distributed:
-    if args.use_cuda:
-        print('===> DistributedDataParallel')
-        net.to(device)
-        net = torch.nn.parallel.DistributedDataParallel(net)
+    # create model
+    if args.pretrained:
+        print("=> using pre-trained model '{}'".format(args.arch))
+        model = models.__dict__[args.arch](pretrained=True)
     else:
-        print('===> DistributedDataParallelCPU')
-        net = torch.nn.parallel.DistributedDataParallelCPU(net)
-else:
-    if args.use_cuda:
-        print('===> DataParallel')
-        net.to(device)
-        net = torch.nn.parallel.DataParallel(net)
+        print("=> creating model '{}'".format(args.arch))
+        model = models.__dict__[args.arch]()
 
-criterion = nn.CrossEntropyLoss().cuda() if args.use_cuda else nn.CrossEntropyLoss() 
-optimizer = torch.optim.SGD(net.parameters(), args.lr, momentum=0.9, weight_decay=5e-4)
+    if args.gpu is not None:
+        model = model.cuda(args.gpu)
+    elif args.distributed:
+        model.cuda()
+        model = torch.nn.parallel.DistributedDataParallel(model)
+    else:
+        if args.arch.startswith('alexnet') or args.arch.startswith('vgg'):
+            model.features = torch.nn.DataParallel(model.features)
+            model.cuda()
+        else:
+            model = torch.nn.DataParallel(model).cuda()
 
-# Training
+    # define loss function (criterion) and optimizer
+    criterion = nn.CrossEntropyLoss().cuda(args.gpu)
 
-def train(epoch):
-    print('\nEpoch: %d' % epoch)
-    print('Train')
-    net.train()
-    train_loss = 0
-    correct = 0
-    total = 0
-    global best_accuracy
+    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
 
-    for batch_idx, (inputs, targets) in enumerate(trainloader):
-        if args.use_cuda:
-            inputs, targets = inputs.to(device), targets.cuda(non_blocking=True)
+    # optionally resume from a checkpoint
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume)
+            args.start_epoch = checkpoint['epoch']
+            best_prec1 = checkpoint['best_prec1']
+            model.load_state_dict(checkpoint['state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer'])
+            print("=> loaded checkpoint '{}' (epoch {})"
+                  .format(args.resume, checkpoint['epoch']))
+        else:
+            print("=> no checkpoint found at '{}'".format(args.resume))
+
+    cudnn.benchmark = True
+
+    # Data loading code
+
+    print('===> Preparing Data')
+    transform_tran = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+    ])
+    
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+    trainset = datasets.CIFAR10(root='./data', train=True, download=True,     transform=transform_tran)
+    trainloader = torch.utils.data.DataLoader(
+        trainset, batch_size=128, shuffle=True, num_workers=1)
+
+    testset = datasets.CIFAR10(root='./data', train=False, download=True,     transform=transform_test)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=1, pin_memory=True)
+
+    classes = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+    if args.evaluate:
+        validate(testloader, model, criterion)
+        return
+
+    for epoch in range(args.start_epoch, args.epochs):
+        if args.distributed:
+            train_sampler.set_epoch(epoch)
+        adjust_learning_rate(optimizer, epoch)
+
+        # train for one epoch
+        train(trainloader, model, criterion, optimizer, epoch)
+
+        # evaluate on validation set
+        prec1 = validate(testloader, model, criterion)
+
+        # remember best prec@1 and save checkpoint
+        is_best = prec1 > best_prec1
+        best_prec1 = max(prec1, best_prec1)
+        save_checkpoint({
+            'epoch': epoch + 1,
+            'arch': args.arch,
+            'state_dict': model.state_dict(),
+            'best_prec1': best_prec1,
+            'optimizer' : optimizer.state_dict(),
+        }, is_best)
+
+
+def train(train_loader, model, criterion, optimizer, epoch):
+    batch_time = AverageMeter()
+    data_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
+
+    # switch to train mode
+    model.train()
+
+    end = time.time()
+    for i, (input, target) in enumerate(train_loader):
+        # measure data loading time
+        data_time.update(time.time() - end)
+
+        if args.gpu is not None:
+            input = input.cuda(args.gpu, non_blocking=True)
+        target = target.cuda(args.gpu, non_blocking=True)
+
+        # compute output
+        output = model(input)
+        loss = criterion(output, target)
+
+        # measure accuracy and record loss
+        prec1, prec5 = accuracy(output, target, topk=(1, 5))
+        losses.update(loss.item(), input.size(0))
+        top1.update(prec1[0], input.size(0))
+        top5.update(prec5[0], input.size(0))
+
+        # compute gradient and do SGD step
         optimizer.zero_grad()
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
-        _, predicted = torch.max(outputs, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
+        # measure elapsed time
+        batch_time.update(time.time() - end)
+        end = time.time()
 
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)' % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-        
-        # Save checkpoint.
-        acc = 100.*correct/total
-        if acc > best_accuracy:
-            print('\nSaving..')
-            state = {
-                'net': net.module if args.use_cuda else net,
-                'acc': acc,
-                'epoch': epoch,
-            }
-            if not os.path.isdir('checkpoint'):
-                os.mkdir('checkpoint')
-            torch.save(state, './checkpoint/ckpt.t7')
-            best_accuracy = acc
+        if i % args.print_freq == 0:
+            print('Epoch: [{0}][{1}/{2}]\t'
+                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                  'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
+                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                   epoch, i, len(train_loader), batch_time=batch_time,
+                   data_time=data_time, loss=losses, top1=top1, top5=top5))
 
-def test(epoch):
-    print('\nTest')
 
-    global best_accuracy
-    net.eval()
-    test_loss = 0
-    correct = 0
-    total = 0
+def validate(val_loader, model, criterion):
+    batch_time = AverageMeter()
+    losses = AverageMeter()
+    top1 = AverageMeter()
+    top5 = AverageMeter()
 
-    for batch_idx, (inputs, targets) in enumerate(testloader):
-        if args.use_cuda:
-            inputs, targets = inputs.to(device), targets.cuda(non_blocking=True)
-        outputs = net(inputs)
-        loss = criterion(outputs, targets)
-
-        test_loss += loss.item()
-        _, predicted = torch.max(outputs, 1)
-        total += targets.size(0)
-        correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)' % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
-
-    # Save checkpoint.
-    acc = 100.*correct/total
-    if acc > best_accuracy:
-        print('\nSaving..')
-        state = {
-            'net': net.module if args.use_cuda else net,
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.isdir('checkpoint'):
-            os.mkdir('checkpoint')
-        torch.save(state, './checkpoint/ckpt.t7')
-        best_accuracy = acc
-
-def validate():
-    print('============================> Validating')
-    class_correct = list(0. for i in range(10))
-    class_total = list(0. for i in range(10))
+    # switch to evaluate mode
+    model.eval()
 
     with torch.no_grad():
-        for data in testloader:
-            images, labels = data
-            if args.use_cuda:
-                images, labels = images.to(device), labels.cuda(non_blocking=True)
- 
-            outputs = net(images)
-            _, predicted = torch.max(outputs, 1)
-            c = (predicted == labels).squeeze()
-            for i in range(4):
-                label = labels[i]
-                class_correct[label] += c[i].item()
-                class_total[label] += 1
+        end = time.time()
+        for i, (input, target) in enumerate(val_loader):
+            if args.gpu is not None:
+                input = input.cuda(args.gpu, non_blocking=True)
+            target = target.cuda(args.gpu, non_blocking=True)
 
-    for i in range(10):
-        print('Accuracy of %5s : %2d %%' % (classes[i], 100 * class_correct[i] / class_total[i]))
-    print('========================================')
+            # compute output
+            output = model(input)
+            loss = criterion(output, target)
+
+            # measure accuracy and record loss
+            prec1, prec5 = accuracy(output, target, topk=(1, 5))
+            losses.update(loss.item(), input.size(0))
+            top1.update(prec1[0], input.size(0))
+            top5.update(prec5[0], input.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                      'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
+                      'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                       i, len(val_loader), batch_time=batch_time, loss=losses,
+                       top1=top1, top5=top5))
+
+        print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
+              .format(top1=top1, top5=top5))
+
+    return top1.avg
+
+
+def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
+    torch.save(state, filename)
+    if is_best:
+        shutil.copyfile(filename, 'model_best.pth.tar')
+
+
+class AverageMeter(object):
+    """Computes and stores the average and current value"""
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.val = 0
+        self.avg = 0
+        self.sum = 0
+        self.count = 0
+
+    def update(self, val, n=1):
+        self.val = val
+        self.sum += val * n
+        self.count += n
+        self.avg = self.sum / self.count
+
+
+def adjust_learning_rate(optimizer, epoch):
+    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
+    lr = args.lr * (0.1 ** (epoch // 30))
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+
+
+def accuracy(output, target, topk=(1,)):
+    """Computes the precision@k for the specified values of k"""
+    with torch.no_grad():
+        maxk = max(topk)
+        batch_size = target.size(0)
+
+        _, pred = output.topk(maxk, 1, True, True)
+        pred = pred.t()
+        correct = pred.eq(target.view(1, -1).expand_as(pred))
+
+        res = []
+        for k in topk:
+            correct_k = correct[:k].view(-1).float().sum(0, keepdim=True)
+            res.append(correct_k.mul_(100.0 / batch_size))
+        return res
+
 
 if __name__ == '__main__':
-    for epoch in range(start_epoch, start_epoch+args.epochs):
-        train(epoch)
-        test(epoch)
-        validate()
+    main()
