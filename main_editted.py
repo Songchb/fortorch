@@ -94,13 +94,13 @@ if args.resume:
     start_epoch = checkpoint['epoch']
 else:
     print('===> Building model...')
-    net = Net()
+#    net = Net()
 #    net = models.resnet18()
-#    net = googlenet.GoogLeNet()
+    net = googlenet.GoogLeNet()
 
 if args.distributed:
     print('===> Distributed Training Mode')
-    dist.init_process_group(backend=args.backend, init_method=args.dist_url, rank=args.rank, world_size=args.world_size)
+    dist.init_process_group(backend=args.backend, init_method=args.dist_url,  world_size=args.world_size)
 
 if args.distributed:
     if args.use_cuda:
