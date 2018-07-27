@@ -213,7 +213,7 @@ optimizer = torch.optim.SGD(net.parameters(), args.lr, momentum=0.9, weight_deca
 def train(epoch):
     print('\nEpoch: %d' % (epoch+1))
     print('Train')
-#    net.train()
+    net.train()
     train_loss = 0
     correct = 0
     total = 0
