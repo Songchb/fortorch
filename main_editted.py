@@ -16,7 +16,6 @@ from torch.autograd import Variable
 
 import torchvision
 import torchvision.transforms as transforms
-import torchvision.models as models
 
 #from utils import progress_bar
 
@@ -184,11 +183,14 @@ if args.resume:
 else:
     print('===> Building model...')
 #    net = Net()
-    net = models.resnet18()
+#    net = models.resnet18()
 #    net = googlenet.GoogLeNet()
+    net = ResNet18()
 
 if args.distributed:
     print('===> Distributed Training Mode')
+    os.environ['MASTER_ADDR'] = '106.10.51.124'
+    os.environ['MASTER_PORT'] = '29500'
     dist.init_process_group(backend=args.backend, init_method=args.dist_url,  world_size=args.world_size)
 
 if args.distributed:
