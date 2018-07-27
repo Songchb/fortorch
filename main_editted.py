@@ -189,9 +189,7 @@ else:
 
 if args.distributed:
     print('===> Distributed Training Mode')
-    os.environ['MASTER_ADDR'] = '106.10.51.124'
-    os.environ['MASTER_PORT'] = '29500'
-    dist.init_process_group(backend=args.backend, init_method=args.dist_url,  world_size=args.world_size)
+    dist.init_process_group(backend=args.backend, init_method=args.dist_url, rank=args.rank, world_size=args.world_size)
 
 if args.distributed:
     if args.use_cuda:
